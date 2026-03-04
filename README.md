@@ -3,10 +3,10 @@ Test OpenAI Agents SDK, Google ADK, and Claude Agent SDK by building the same mu
 
 ## **Agent Roles**
 
-Research Agent — Searches the web, pulls company filings, gathers competitor data into a structured brief
-Analysis Agent — Takes the brief, runs financial calculations, identifies risks, scores the opportunity
-Writer Agent — Drafts a 2-page investment memo using analysis output, following a company template
-QA/Review Agent — Checks the memo for factual consistency against research data, flags hallucinations, requests revisions
+- **Research Agent** — Searches the web, pulls company filings, gathers competitor data into a structured brief
+- **Analysis Agent** — Takes the brief, runs financial calculations, identifies risks, scores the opportunity
+- **Writer Agent** — Drafts a 2-page investment memo using analysis output, following a company template
+- **QA/Review Agent** — Checks the memo for factual consistency against research data, flags hallucinations, requests revisions
 
 ## **Evaluation Dimensions**
 
