@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Simple 2-Agent System using Anthropic SDK
+Simple 3-Agent System using Anthropic SDK
 Agent 1: Researcher - Searches for company information
 Agent 2: Analyzer - Analyzes the research and scores opportunities
+Agent 3: Writer - Drafts a 2-page investment memo from research + analysis
 """
 
 import json
@@ -76,6 +77,27 @@ ANALYZER_TOOLS = [
                 }
             },
             "required": ["company_name", "analysis_summary"]
+        }
+    }
+]
+
+WRITER_TOOLS = [
+    {
+        "name": "format_memo",
+        "description": "Format the investment memo into a structured company template with sections like Executive Summary, Company Overview, Financial Analysis, Investment Thesis, Risks, and Recommendation",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_name": {
+                    "type": "string",
+                    "description": "Name of the company"
+                },
+                "sections": {
+                    "type": "object",
+                    "description": "Memo sections with keys: executive_summary, company_overview, financial_analysis, investment_thesis, risks, recommendation"
+                }
+            },
+            "required": ["company_name", "sections"]
         }
     }
 ]
@@ -185,8 +207,8 @@ def extract_headquarters(text: str) -> str:
 
 def execute_calculate_metric(metric_type: str, company_data: dict) -> dict:
     """Simulated metric calculation"""
-    employees = company_data.get("employees", 1)
-    revenue_value = company_data.get("revenue", "$0")
+    employees = company_data.get("employees") or 1
+    revenue_value = company_data.get("revenue") or "$0"
 
     # Convert to string and clean up
     revenue_str = str(revenue_value).replace("$", "").replace("M", "").replace(",", "")
@@ -221,6 +243,61 @@ def execute_score_opportunity(company_name: str, analysis_summary: str) -> dict:
         "investment_readiness": "Ready"
     }
 
+def execute_format_memo(company_name: str, sections: dict) -> dict:
+    """Format memo into a structured company template"""
+    from datetime import date
+
+    template = f"""
+{'='*70}
+CONFIDENTIAL — INVESTMENT MEMO
+{'='*70}
+
+Company:    {company_name}
+Date:       {date.today().strftime('%B %d, %Y')}
+Prepared by: AI Investment Research Pipeline
+
+{'─'*70}
+1. EXECUTIVE SUMMARY
+{'─'*70}
+{sections.get('executive_summary', 'N/A')}
+
+{'─'*70}
+2. COMPANY OVERVIEW
+{'─'*70}
+{sections.get('company_overview', 'N/A')}
+
+{'─'*70}
+3. FINANCIAL ANALYSIS
+{'─'*70}
+{sections.get('financial_analysis', 'N/A')}
+
+{'─'*70}
+4. INVESTMENT THESIS
+{'─'*70}
+{sections.get('investment_thesis', 'N/A')}
+
+{'─'*70}
+5. KEY RISKS
+{'─'*70}
+{sections.get('risks', 'N/A')}
+
+{'─'*70}
+6. RECOMMENDATION
+{'─'*70}
+{sections.get('recommendation', 'N/A')}
+
+{'='*70}
+END OF MEMO
+{'='*70}
+"""
+
+    return {
+        "success": True,
+        "formatted_memo": template,
+        "word_count": len(template.split()),
+        "sections_included": list(sections.keys())
+    }
+
 def process_tool_call(tool_name: str, tool_input: dict) -> str:
     """Process tool calls and return results"""
     print(f"  → Calling tool: {tool_name}")
@@ -231,6 +308,8 @@ def process_tool_call(tool_name: str, tool_input: dict) -> str:
         result = execute_calculate_metric(tool_input["metric_type"], tool_input["company_data"])
     elif tool_name == "score_opportunity":
         result = execute_score_opportunity(tool_input["company_name"], tool_input["analysis_summary"])
+    elif tool_name == "format_memo":
+        result = execute_format_memo(tool_input["company_name"], tool_input["sections"])
     else:
         result = {"error": f"Unknown tool: {tool_name}"}
 
@@ -402,6 +481,96 @@ Use the available tools to complete this analysis."""
     print()
     return analysis_output
 
+def run_writer_agent(company_name: str, research_brief: str, analysis_brief: str) -> str:
+    """
+    Agent 3: Writer Agent
+    Takes research from Agent 1 and analysis from Agent 2,
+    drafts a 2-page investment memo following a company template
+    """
+    print("="*70)
+    print("AGENT 3: WRITER")
+    print("="*70)
+    print("Task: Draft a 2-page investment memo")
+    print()
+    print(f"Received Research from Agent 1 and Analysis from Agent 2\n")
+
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are an investment memo writer. You have received the following inputs from the research and analysis pipeline:
+
+--- RESEARCH BRIEF (from Researcher Agent) ---
+{research_brief}
+
+--- ANALYSIS BRIEF (from Analyzer Agent) ---
+{analysis_brief}
+
+Your task is to draft a professional 2-page investment memo for {company_name}. Use the format_memo tool to structure it with these sections:
+
+1. **Executive Summary** — 2-3 sentence high-level overview of the opportunity
+2. **Company Overview** — What the company does, founding, sector, headquarters
+3. **Financial Analysis** — Key metrics, revenue, growth potential from the analysis
+4. **Investment Thesis** — Why this is a compelling investment opportunity
+5. **Key Risks** — 3-4 bullet points of risks to consider
+6. **Recommendation** — Final investment recommendation with rationale
+
+Keep the tone professional and concise. Each section should be substantive but focused — aim for roughly 2 pages total."""
+        }
+    ]
+
+    iteration = 1
+    writer_output = None
+
+    while True:
+        print(f"Iteration {iteration}:")
+
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            tools=WRITER_TOOLS,
+            messages=messages
+        )
+
+        print(f"  Stop Reason: {response.stop_reason}")
+
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input
+                    tool_use_id = block.id
+
+                    print(f"  Tool Input: {json.dumps(tool_input, indent=2)[:200]}...")
+
+                    tool_result = process_tool_call(tool_name, tool_input)
+                    print(f"  Tool Result: [formatted memo generated]")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": tool_result
+                    })
+                elif block.type == "text":
+                    if block.text:
+                        print(f"  Text: {block.text[:200]}...")
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+        elif response.stop_reason == "end_turn":
+            for block in response.content:
+                if block.type == "text":
+                    writer_output = block.text
+                    print(f"  Final Output: {block.text[:300]}...")
+            break
+
+        iteration += 1
+        print()
+
+    print()
+    return writer_output
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -410,8 +579,8 @@ def main():
     """Main orchestration function"""
     print("\n")
     print("*" * 70)
-    print("SIMPLE 2-AGENT SYSTEM")
-    print("Researcher → Analyzer Pipeline")
+    print("SIMPLE 3-AGENT SYSTEM")
+    print("Researcher → Analyzer → Writer Pipeline")
     print("*" * 70)
     print()
 
@@ -429,7 +598,10 @@ def main():
     # Step 2: Run Analyzer Agent with Researcher's output
     agent2_output = run_analyzer_agent(agent1_output)
 
-    # Step 3: Show final results
+    # Step 3: Run Writer Agent with both Agent 1 and Agent 2 outputs
+    agent3_output = run_writer_agent(company_name, agent1_output, agent2_output)
+
+    # Step 4: Show final results
     print("="*70)
     print("FINAL RESULTS")
     print("="*70)
@@ -442,8 +614,12 @@ def main():
     print("-" * 70)
     print(agent2_output)
     print()
-    print("✓ SUCCESS: Agents communicated successfully!")
-    print("  Agent 1 research was passed to Agent 2 and analyzed.")
+    print("AGENT 3 INVESTMENT MEMO:")
+    print("-" * 70)
+    print(agent3_output)
+    print()
+    print("✓ SUCCESS: All 3 agents communicated successfully!")
+    print("  Agent 1 research → Agent 2 analysis → Agent 3 investment memo")
     print()
 
 if __name__ == "__main__":
