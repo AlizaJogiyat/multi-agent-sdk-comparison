@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
 """
-Simple 3-Agent System using Anthropic SDK
+4-Agent Investment Memo Pipeline using Anthropic SDK
 Agent 1: Researcher - Searches for company information
 Agent 2: Analyzer - Analyzes the research and scores opportunities
 Agent 3: Writer - Drafts a 2-page investment memo from research + analysis
+Agent 4: QA/Review - Checks memo for factual consistency, flags hallucinations, requests revisions
 """
 
 import json
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from anthropic import Anthropic
-import requests
-from bs4 import BeautifulSoup
 import wikipedia
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Initialize Anthropic client with API key from .env
-client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL = "claude-sonnet-4-6"
+
+
+def get_client(env_path: str = None) -> Anthropic:
+    """Initialize and return Anthropic client. Loads .env from given path or auto-detects."""
+    if env_path:
+        load_dotenv(dotenv_path=env_path)
+    else:
+        # Try local .env first, then claude-agent/.env
+        local_env = Path(__file__).parent / ".env"
+        if local_env.exists():
+            load_dotenv(dotenv_path=local_env)
+        else:
+            load_dotenv()
+    return Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 # ============================================================================
 # TOOL DEFINITIONS
@@ -98,6 +107,59 @@ WRITER_TOOLS = [
                 }
             },
             "required": ["company_name", "sections"]
+        }
+    }
+]
+
+QA_TOOLS = [
+    {
+        "name": "fact_check",
+        "description": "Cross-reference a claim from the investment memo against the original research data. Returns whether the claim is supported, unsupported, or contradicted by the source data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "claim": {
+                    "type": "string",
+                    "description": "The specific claim or statement from the memo to verify"
+                },
+                "source_data": {
+                    "type": "string",
+                    "description": "The original research data to check the claim against"
+                }
+            },
+            "required": ["claim", "source_data"]
+        }
+    },
+    {
+        "name": "flag_issue",
+        "description": "Flag a specific issue found in the memo such as a hallucination, factual inconsistency, unsupported claim, or missing information",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "issue_type": {
+                    "type": "string",
+                    "enum": ["hallucination", "inconsistency", "unsupported_claim", "missing_info", "formatting"],
+                    "description": "Type of issue found"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Detailed description of the issue"
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["critical", "major", "minor"],
+                    "description": "Severity level of the issue"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Which section of the memo the issue is in"
+                },
+                "suggestion": {
+                    "type": "string",
+                    "description": "Suggested fix or revision"
+                }
+            },
+            "required": ["issue_type", "description", "severity", "location"]
         }
     }
 ]
@@ -298,6 +360,61 @@ END OF MEMO
         "sections_included": list(sections.keys())
     }
 
+def execute_fact_check(claim: str, source_data: str) -> dict:
+    """Cross-reference a claim against source data"""
+    claim_lower = claim.lower()
+    source_lower = source_data.lower()
+
+    # Check if key terms from the claim appear in the source
+    claim_words = set(claim_lower.split())
+    source_words = set(source_lower.split())
+    overlap = claim_words & source_words
+    overlap_ratio = len(overlap) / max(len(claim_words), 1)
+
+    if overlap_ratio > 0.4:
+        verdict = "SUPPORTED"
+        confidence = min(0.5 + overlap_ratio, 0.95)
+        explanation = "Key terms from this claim are found in the source research data."
+    elif overlap_ratio > 0.2:
+        verdict = "PARTIALLY_SUPPORTED"
+        confidence = 0.4 + overlap_ratio
+        explanation = "Some elements of this claim are present in the source data, but not all details can be verified."
+    else:
+        verdict = "UNSUPPORTED"
+        confidence = max(0.3, overlap_ratio)
+        explanation = "This claim does not appear to be directly supported by the source research data. It may be a hallucination or inference not grounded in the provided research."
+
+    return {
+        "claim": claim[:200],
+        "verdict": verdict,
+        "confidence": round(confidence, 2),
+        "explanation": explanation,
+        "matching_terms": list(overlap)[:10]
+    }
+
+def execute_flag_issue(issue_type: str, description: str, severity: str, location: str, suggestion: str = "") -> dict:
+    """Record a flagged issue in the memo"""
+    severity_icons = {"critical": "🔴", "major": "🟠", "minor": "🟡"}
+    type_labels = {
+        "hallucination": "Hallucination Detected",
+        "inconsistency": "Factual Inconsistency",
+        "unsupported_claim": "Unsupported Claim",
+        "missing_info": "Missing Information",
+        "formatting": "Formatting Issue"
+    }
+
+    return {
+        "issue_id": f"QA-{hash(description) % 10000:04d}",
+        "icon": severity_icons.get(severity, "⚪"),
+        "type_label": type_labels.get(issue_type, issue_type),
+        "issue_type": issue_type,
+        "severity": severity,
+        "location": location,
+        "description": description,
+        "suggestion": suggestion or "No suggestion provided",
+        "status": "OPEN"
+    }
+
 def process_tool_call(tool_name: str, tool_input: dict) -> str:
     """Process tool calls and return results"""
     print(f"  → Calling tool: {tool_name}")
@@ -310,6 +427,16 @@ def process_tool_call(tool_name: str, tool_input: dict) -> str:
         result = execute_score_opportunity(tool_input["company_name"], tool_input["analysis_summary"])
     elif tool_name == "format_memo":
         result = execute_format_memo(tool_input["company_name"], tool_input["sections"])
+    elif tool_name == "fact_check":
+        result = execute_fact_check(tool_input["claim"], tool_input["source_data"])
+    elif tool_name == "flag_issue":
+        result = execute_flag_issue(
+            tool_input["issue_type"],
+            tool_input["description"],
+            tool_input["severity"],
+            tool_input["location"],
+            tool_input.get("suggestion", "")
+        )
     else:
         result = {"error": f"Unknown tool: {tool_name}"}
 
@@ -319,7 +446,7 @@ def process_tool_call(tool_name: str, tool_input: dict) -> str:
 # AGENT FUNCTIONS
 # ============================================================================
 
-def run_researcher_agent(company_name: str) -> str:
+def run_researcher_agent(client: Anthropic, company_name: str) -> str:
     """
     Agent 1: Researcher Agent
     Searches for company information and returns research brief
@@ -395,7 +522,7 @@ def run_researcher_agent(company_name: str) -> str:
     print()
     return research_output
 
-def run_analyzer_agent(research_brief: str) -> str:
+def run_analyzer_agent(client: Anthropic, research_brief: str) -> str:
     """
     Agent 2: Analyzer Agent
     Takes research from Agent 1 and analyzes it
@@ -481,7 +608,7 @@ Use the available tools to complete this analysis."""
     print()
     return analysis_output
 
-def run_writer_agent(company_name: str, research_brief: str, analysis_brief: str) -> str:
+def run_writer_agent(client: Anthropic, company_name: str, research_brief: str, analysis_brief: str) -> str:
     """
     Agent 3: Writer Agent
     Takes research from Agent 1 and analysis from Agent 2,
@@ -571,6 +698,107 @@ Keep the tone professional and concise. Each section should be substantive but f
     print()
     return writer_output
 
+def run_qa_agent(client: Anthropic, company_name: str, research_brief: str, analysis_brief: str, memo: str) -> str:
+    """
+    Agent 4: QA/Review Agent
+    Checks the memo for factual consistency against research data,
+    flags hallucinations, and requests revisions
+    """
+    print("="*70)
+    print("AGENT 4: QA / REVIEW")
+    print("="*70)
+    print("Task: Fact-check memo against research data, flag issues")
+    print()
+    print(f"Reviewing investment memo for {company_name}\n")
+
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are a senior QA reviewer for investment memos. Your job is to ensure factual accuracy and flag any problems.
+
+You have 3 documents to cross-reference:
+
+--- ORIGINAL RESEARCH (Source of Truth) ---
+{research_brief}
+
+--- ANALYSIS ---
+{analysis_brief}
+
+--- INVESTMENT MEMO (To Review) ---
+{memo}
+
+Your task:
+1. **Fact-check** at least 3-5 key claims in the memo against the original research data using the fact_check tool. Focus on numbers, dates, company details, and financial figures.
+2. **Flag issues** using the flag_issue tool for any:
+   - Hallucinations (facts in the memo not present in the research)
+   - Inconsistencies (memo contradicts the research or analysis)
+   - Unsupported claims (conclusions not backed by data)
+   - Missing information (important data from research that was left out)
+3. After checking, provide a final QA summary with:
+   - Overall quality score (1-10)
+   - Number of issues found by severity
+   - Whether the memo is APPROVED, NEEDS REVISION, or REJECTED
+   - Specific revision requests if needed"""
+        }
+    ]
+
+    iteration = 1
+    qa_output = None
+
+    while True:
+        print(f"Iteration {iteration}:")
+
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            tools=QA_TOOLS,
+            messages=messages
+        )
+
+        print(f"  Stop Reason: {response.stop_reason}")
+
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input
+                    tool_use_id = block.id
+
+                    print(f"  Tool: {tool_name}")
+                    if tool_name == "fact_check":
+                        print(f"    Checking: {tool_input.get('claim', '')[:100]}...")
+                    elif tool_name == "flag_issue":
+                        print(f"    Flagging: [{tool_input.get('severity', '')}] {tool_input.get('issue_type', '')} - {tool_input.get('description', '')[:80]}...")
+
+                    tool_result = process_tool_call(tool_name, tool_input)
+                    print(f"    Result: {tool_result[:150]}...")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": tool_result
+                    })
+                elif block.type == "text":
+                    if block.text:
+                        print(f"  Text: {block.text[:200]}...")
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+        elif response.stop_reason == "end_turn":
+            for block in response.content:
+                if block.type == "text":
+                    qa_output = block.text
+                    print(f"  Final Output: {block.text[:300]}...")
+            break
+
+        iteration += 1
+        print()
+
+    print()
+    return qa_output
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -579,10 +807,13 @@ def main():
     """Main orchestration function"""
     print("\n")
     print("*" * 70)
-    print("SIMPLE 3-AGENT SYSTEM")
-    print("Researcher → Analyzer → Writer Pipeline")
+    print("4-AGENT INVESTMENT MEMO PIPELINE")
+    print("Researcher → Analyzer → Writer → QA/Review")
     print("*" * 70)
     print()
+
+    # Initialize client
+    client = get_client()
 
     # Get company name from user
     company_name = input("Enter company name to research: ").strip()
@@ -593,15 +824,18 @@ def main():
     print()
 
     # Step 1: Run Researcher Agent
-    agent1_output = run_researcher_agent(company_name)
+    agent1_output = run_researcher_agent(client, company_name)
 
     # Step 2: Run Analyzer Agent with Researcher's output
-    agent2_output = run_analyzer_agent(agent1_output)
+    agent2_output = run_analyzer_agent(client, agent1_output)
 
     # Step 3: Run Writer Agent with both Agent 1 and Agent 2 outputs
-    agent3_output = run_writer_agent(company_name, agent1_output, agent2_output)
+    agent3_output = run_writer_agent(client, company_name, agent1_output, agent2_output)
 
-    # Step 4: Show final results
+    # Step 4: Run QA/Review Agent with all previous outputs
+    agent4_output = run_qa_agent(client, company_name, agent1_output, agent2_output, agent3_output)
+
+    # Step 5: Show final results
     print("="*70)
     print("FINAL RESULTS")
     print("="*70)
@@ -618,8 +852,12 @@ def main():
     print("-" * 70)
     print(agent3_output)
     print()
-    print("✓ SUCCESS: All 3 agents communicated successfully!")
-    print("  Agent 1 research → Agent 2 analysis → Agent 3 investment memo")
+    print("AGENT 4 QA REVIEW:")
+    print("-" * 70)
+    print(agent4_output)
+    print()
+    print("✓ SUCCESS: All 4 agents communicated successfully!")
+    print("  Agent 1 research → Agent 2 analysis → Agent 3 memo → Agent 4 QA review")
     print()
 
 if __name__ == "__main__":
