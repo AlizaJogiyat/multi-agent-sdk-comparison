@@ -42,7 +42,7 @@ export default async function SdkPage({ params }: { params: Promise<{ slug: stri
       {/* Agents */}
       <section className="mb-10">
         <h2 className="text-xl font-semibold mb-3">Pipeline Agents</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className={`grid grid-cols-1 gap-4 ${sdk.agents.length === 4 ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}>
           {sdk.agents.map((agent, i) => (
             <div key={agent.name} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
               <div className="text-xs text-gray-500 mb-1">Agent {i + 1}</div>

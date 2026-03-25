@@ -9,15 +9,17 @@ export default function Home() {
           Multi-Agent SDK Comparison
         </h1>
         <p className="text-lg text-gray-400 max-w-2xl mx-auto">
-          Same 3-agent investment memo pipeline built with different SDKs.
+          Same 4-agent investment memo pipeline built with different SDKs.
           Compare how Claude, OpenAI, and Google ADK handle tool use, handoffs, and orchestration.
         </p>
-        <div className="flex items-center justify-center gap-2 mt-6 text-sm text-gray-500">
+        <div className="flex items-center justify-center gap-2 mt-6 text-sm text-gray-500 flex-wrap">
           <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">Researcher</span>
           <span>→</span>
           <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">Analyzer</span>
           <span>→</span>
           <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">Writer</span>
+          <span>→</span>
+          <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">QA/Review</span>
         </div>
       </div>
 
