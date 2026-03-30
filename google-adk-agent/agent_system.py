@@ -20,7 +20,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-3.1-pro-preview" #3.1 something recommended
 APP_NAME = "investment_pipeline"
 
 
