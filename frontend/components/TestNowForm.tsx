@@ -4,7 +4,10 @@ import { useState, useCallback } from "react";
 import jsPDF from "jspdf";
 import TerminalOutput, { TerminalLine } from "./TerminalOutput";
 
-const API_URL = "http://localhost:8000";
+// Empty string = relative URL so Vercel routes /api/* to the Python serverless function.
+// Set NEXT_PUBLIC_API_URL to point at a standalone backend when running outside Vercel
+// (e.g. NEXT_PUBLIC_API_URL=http://localhost:8000 for local development without rewrites).
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 function parseSSEMessages(
   buffer: string,
